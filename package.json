@@ -19,6 +19,7 @@
   "files": ["dist", "README.ja.md"],
   "scripts": {
     "build": "vite build && tsc -p tsconfig.json",
+    "test": "npm run build && node --test",
     "prepack": "npm run build"
   },
   "devDependencies": {
