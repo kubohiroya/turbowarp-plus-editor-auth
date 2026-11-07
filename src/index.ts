@@ -28,3 +28,8 @@ export interface GitAuthProvider {
     getSession(): Promise<GitProxySession | null>;
     disconnect(): Promise<void>;
 }
+
+export {createCloudflareGitAuth, CloudflareGitAuthError} from './cloudflare.js';
+export type {CloudflareGitAuthOptions} from './cloudflare.js';
+export {createGitConnectionSettings} from './connection-settings.js';
+export type {DesktopGitPreload} from './connection-settings.js';
