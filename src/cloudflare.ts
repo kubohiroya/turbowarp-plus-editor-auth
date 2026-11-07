@@ -1,4 +1,5 @@
 import type {GitAuthProvider, GitAuthState, GitProxySession} from './index.js';
+import {isGitHubRemote} from './github-remote.js';
 
 export interface CloudflareGitAuthOptions {
     readonly bffOrigin: string;
@@ -34,9 +35,7 @@ async function responseJson(response: Response) {
 
 export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitAuthProvider {
     const {bffOrigin, proxyOrigin, remote, write, openAuthorization, fetch: send = fetch} = options;
-    const repo = /^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/([A-Za-z0-9_.-]+?)(?:\.git)?$/u.exec(remote);
-    if (!isHttpsOrigin(bffOrigin) || !isHttpsOrigin(proxyOrigin) || repo?.[0] !== remote ||
-        ['.', '..', '.git'].includes(repo[1].toLowerCase())) {
+    if (!isHttpsOrigin(bffOrigin) || !isHttpsOrigin(proxyOrigin) || !isGitHubRemote(remote)) {
         throw new CloudflareGitAuthError('INVALID_CONFIGURATION');
     }
 
