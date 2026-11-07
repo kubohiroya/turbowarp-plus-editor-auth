@@ -8,6 +8,6 @@ Desktop handles GitHub device authorization and the loopback proxy in its main p
 
 `createCloudflareGitAuth` binds a provider to two configured HTTPS origins, the selected GitHub repository and its requested read or write access. The host calls `connect()` after an explicit user action and supplies `openAuthorization` to open the validated GitHub URL. After GitHub redirects to the BFF, the host can poll `getState()` while the login is pending. The provider sends the login ticket to the BFF and exposes a separate short-lived proxy Bearer via `getSession()`. The host can retry `disconnect()` if revocation fails.
 
-`createGitConnectionSettings` supplies the Git panel with display state and explicit connection actions. It accepts the Desktop `EditorPreload.localGit` bridge and the configured Cloudflare origins. Switching providers waits for the previous session to be revoked. The settings request read-only repository authorization.
+`createGitConnectionSettings` supplies the Git panel with display state and explicit connection actions. It accepts the Desktop `EditorPreload.localGit` bridge and the configured Cloudflare origins. Switching providers waits for the previous session to be revoked. The default repository authorization is read-only. An explicit push grant is tied to the selected repository and provider.
 
 Run `npm ci` and `npm run build` with Node.js 26 to produce the Vite library entry and TypeScript declarations. [Contract and integration scope](https://github.com/kubohiroya/turbowarp-plus-editor/issues/315).

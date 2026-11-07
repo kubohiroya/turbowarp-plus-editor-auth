@@ -15,6 +15,7 @@ type View = {
     mode: GitConnectionMode | null;
     state: GitAuthState;
     proxyOrigin?: string;
+    write?: boolean;
     authorization?: {url: string; userCode?: string};
 };
 
@@ -31,6 +32,7 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
     let desktopStarted = false;
     let revoking = false;
     let revision = 0;
+    let remote: string | null = null;
     let desktopLogin: {done: boolean; failed: boolean; remote: string} | null = null;
 
     function acceptDesktopSession(session: GitProxySession | null) {
@@ -44,6 +46,7 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
 
     async function disconnect() {
         revision++;
+        remote = null;
         desktopLogin = null;
         view = {mode: view.mode, state: disconnected,
             proxyOrigin: view.mode === 'cloudflare' ? cloudflare?.proxyOrigin : undefined};
@@ -64,16 +67,17 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
             await disconnect();
             view = {mode, state: disconnected, proxyOrigin: mode === 'cloudflare' ? cloudflare?.proxyOrigin : undefined};
         },
-        async connect(remote: string) {
-            if (!isGitHubRemote(remote)) throw new Error('INVALID_REMOTE');
+        async connect(target: string, write = false) {
+            if (!isGitHubRemote(target)) throw new Error('INVALID_REMOTE');
             if (!view.mode || view.state.status === 'connecting' || revoking) throw new Error('GIT_UNAVAILABLE');
             if (provider || desktopStarted) await disconnect();
             const mode = view.mode;
             const active = ++revision;
-            view = {...view, state: {status: 'connecting'}};
+            remote = target;
+            view = {...view, write, state: {status: 'connecting'}};
             try {
                 if (mode === 'cloudflare' && cloudflare) {
-                    provider = createCloudflareGitAuth({...cloudflare, remote, write: false,
+                    provider = createCloudflareGitAuth({...cloudflare, remote: target, write,
                         openAuthorization(url) {
                             if (revision === active) view = {...view, authorization: {url}};
                         }
@@ -87,7 +91,7 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
                         !/^[A-Z0-9-]+$/u.test(userCode) || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now())
                         throw new Error('INVALID_RESPONSE');
                     view = {...view, authorization: {url: verificationUri, userCode}};
-                    const login = {done: false, failed: false, remote};
+                    const login = {done: false, failed: false, remote: target};
                     desktopLogin = login;
                     void desktop.finish().then(
                         () => {login.done = true;},
@@ -114,11 +118,11 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
                 return;
             }
             if (desktopLogin?.done) {
-                const session = acceptDesktopSession(await desktop.authorizeRepository(desktopLogin.remote, false));
+                const session = acceptDesktopSession(await desktop.authorizeRepository(desktopLogin.remote, view.write));
                 if (active !== revision) return;
                 if (!session) throw new Error('SESSION_REQUIRED');
                 desktopLogin = null;
-                view = {mode: 'desktop', proxyOrigin: session.connection.proxyOrigin,
+                view = {mode: 'desktop', proxyOrigin: session.connection.proxyOrigin, write: view.write,
                     state: {status: 'connected', account: session.account, expiresAt: session.expiresAt}};
             } else if (view.state.status === 'connected') {
                 const session = acceptDesktopSession(await desktop.getSession());
@@ -126,8 +130,9 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
             }
         },
         disconnect,
-        async getSession(): Promise<GitProxySession | null> {
-            if (revoking || view.state.status !== 'connected') return null;
+        async getSession(target?: string, write = false): Promise<GitProxySession | null> {
+            if (revoking || view.state.status !== 'connected' || (target !== undefined && target !== remote) ||
+                (write && !view.write)) return null;
             const active = revision;
             const session = provider ? await provider.getSession() : acceptDesktopSession(await desktop?.getSession() ?? null);
             return active === revision && session?.connection.mode === view.mode &&
@@ -142,7 +147,7 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
     }
     return {...commands,
         select: (mode: GitConnectionMode) => serial(() => commands.select(mode)),
-        connect: (remote: string) => serial(() => commands.connect(remote)),
+        connect: (remote: string, write?: boolean) => serial(() => commands.connect(remote, write)),
         refresh: () => serial(commands.refresh),
         disconnect: () => serial(disconnect)
     };
