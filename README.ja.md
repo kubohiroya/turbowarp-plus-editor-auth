@@ -14,7 +14,8 @@ Node.js 26 で `npm ci` と `npm run build` を実行すると、Vite のライ�
 
 ## 公開
 
-npm への公開は `.github/workflows/release.yml` が行う。`main` への push で `package.json` の版が
-npm にまだ無いときだけ、テストを通したうえで公開する。すでにある版では何もしない。認証はトークン
-ではなく npm の Trusted Publisher（OIDC）で、`id-token: write` の権限を使い、provenance が自動で付く。
-npm 側の設定にはこのワークフローのファイル名をそのまま登録するため、改名するときは npm の設定も合わせる。
+npm への公開は `.github/workflows/release.yml` が行う。`package.json` の版と同じ `v<版>` のタグを
+`main` のコミットに push すると、テストを通したうえで npm に入れるアーカイブを作り、GitHub Release に
+添付してから npm に公開し、`latest` と `next` をその版に向ける。認証はトークンではなく npm の
+Trusted Publisher（OIDC）で、provenance を付けて公開する。npm 側の設定にはこのワークフローの
+ファイル名をそのまま登録するため、改名するときは npm の設定も合わせる。

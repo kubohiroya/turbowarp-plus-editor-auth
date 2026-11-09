@@ -14,7 +14,8 @@ Run `npm ci` and `npm run build` with Node.js 26 to produce the Vite library ent
 
 ## Release
 
-`.github/workflows/release.yml` publishes to npm. On a push to `main`, it runs the tests and publishes
-only when the version in `package.json` is not on npm yet; an existing version is left alone. It
-authenticates with npm Trusted Publishing (OIDC) through the `id-token: write` permission, not a token,
-and npm attaches provenance. The npm settings name this workflow file, so rename both together.
+`.github/workflows/release.yml` publishes to npm. Push a `v<version>` tag that names the
+`package.json` version on a `main` commit: the workflow runs the tests, packs the archive, attaches it
+to the GitHub Release, publishes it to npm and points `latest` and `next` at it. It authenticates with
+npm Trusted Publishing (OIDC), not a token, and publishes with provenance. The npm settings name this
+workflow file, so rename both together.
