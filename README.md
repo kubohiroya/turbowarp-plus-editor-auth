@@ -11,3 +11,11 @@ Desktop handles GitHub device authorization and the loopback proxy in its main p
 `createGitConnectionSettings` supplies the Git panel with display state and explicit connection actions. It accepts the Desktop `EditorPreload.localGit` bridge and the configured Cloudflare origins. Switching providers waits for the previous session to be revoked. The default repository authorization is read-only. An explicit push grant is tied to the selected repository and provider.
 
 Run `npm ci` and `npm run build` with Node.js 26 to produce the Vite library entry and TypeScript declarations. [Contract and integration scope](https://github.com/kubohiroya/turbowarp-plus-editor/issues/315).
+
+## Release
+
+`.github/workflows/release.yml` publishes to npm. Push a `v<version>` tag that names the
+`package.json` version on a `main` commit: the workflow runs the tests, packs the archive, attaches it
+to the GitHub Release, publishes it to npm and points `latest` and `next` at it. It authenticates with
+npm Trusted Publishing (OIDC), not a token, and publishes with provenance. The npm settings name this
+workflow file, so rename both together.

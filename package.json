@@ -18,8 +18,13 @@
   },
   "files": [
     "dist",
-    "README.ja.md"
+    "README.ja.md",
+    "README.md",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "vite build && tsc -p tsconfig.json",
     "test": "npm run build && node --test",
