@@ -11,3 +11,10 @@ Desktop のメインプロセスが GitHub の device flow とループバック
 `createGitConnectionSettings` は Git パネルに表示状態と接続操作を渡します。Desktop の `EditorPreload.localGit` と、設定済みの Cloudflare オリジンを受け取ります。方式の切り替えでは現在のセッションの失効を待ちます。既定では読取権限を要求し、push は選択したリポジトリと方式に対する明示的な許可が必要です。
 
 Node.js 26 で `npm ci` と `npm run build` を実行すると、Vite のライブラリエントリと TypeScript の型宣言が生成されます。 [接続契約と作業範囲](https://github.com/kubohiroya/turbowarp-plus-editor/issues/315)
+
+## 公開
+
+npm への公開は `.github/workflows/release.yml` が行う。`main` への push で `package.json` の版が
+npm にまだ無いときだけ、テストを通したうえで公開する。すでにある版では何もしない。認証はトークン
+ではなく npm の Trusted Publisher（OIDC）で、`id-token: write` の権限を使い、provenance が自動で付く。
+npm 側の設定にはこのワークフローのファイル名をそのまま登録するため、改名するときは npm の設定も合わせる。

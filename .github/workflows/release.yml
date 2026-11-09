@@ -1,0 +1,68 @@
+# npm の Trusted Publisher（OIDC）で公開する。トークンは使わない。
+# npm 側の設定にはこのファイル名をそのまま登録する必要があるため、改名するときは
+# npm の Trusted Publisher の設定も同じ名前に直す。
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # package.json の版がまだ npm にないときだけ公開する。すでにある版では何もしない。
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      package: ${{ steps.version.outputs.package }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - id: version
+        run: |
+          name=$(node -p 'require("./package.json").name')
+          version=$(node -p 'require("./package.json").version')
+          echo "package=$name@$version" >> "$GITHUB_OUTPUT"
+          if npm view "$name@$version" version > /dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "$name@$version はすでに npm にある。公開しない。" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "$name@$version を公開する。" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  publish:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Trusted Publisher はこの OIDC トークンで本人確認する。これがないと公開できない。
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      # Trusted Publisher は npm 11.5.1 以上を要求する。足りないと公開時に 404 という
+      # 分かりにくい形で落ちるので、先にここで止めて理由を示す。
+      - name: Check the npm version
+        run: |
+          floor=11.5.1
+          current=$(npm --version)
+          echo "node $(node --version) / npm $current"
+          if [ "$(printf '%s\n%s\n' "$floor" "$current" | sort -V | head -1)" != "$floor" ]; then
+            echo "npm $current は Trusted Publisher の下限 $floor より古い。node-version を上げるか npm を更新する。"
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm test
+      # provenance は公開リポジトリの Trusted Publisher では自動で付くため、指定しない。
+      - run: npm publish
