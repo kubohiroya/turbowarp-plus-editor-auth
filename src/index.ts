@@ -32,4 +32,4 @@ export interface GitAuthProvider {
 export {createCloudflareGitAuth, CloudflareGitAuthError} from './cloudflare.js';
 export type {CloudflareGitAuthOptions} from './cloudflare.js';
 export {createGitConnectionSettings} from './connection-settings.js';
-export type {DesktopGitPreload} from './connection-settings.js';
+export type {DesktopGitPreload, DesktopGitAuthMethod, DesktopGitAuthOptions} from './connection-settings.js';

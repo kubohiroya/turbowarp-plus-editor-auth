@@ -3,7 +3,19 @@ import {isGitHubRemote} from './github-remote.js';
 import type {CloudflareGitAuthOptions} from './cloudflare.js';
 import type {GitAuthProvider, GitAuthState, GitConnectionMode, GitProxySession} from './index.js';
 
+const desktopMethods = ['github-app', 'fine-grained-pat', 'git-credential-helper'] as const;
+export type DesktopGitAuthMethod = typeof desktopMethods[number];
+export type DesktopGitAuthOptions =
+    | {method: 'github-app'}
+    | {method: 'fine-grained-pat'; remember: boolean}
+    | {method: 'git-credential-helper'; login: string};
+type DesktopTokenConnection = {status: 'connected'} | null;
+
 export interface DesktopGitPreload {
+    getAuthMethods?(remote?: string): Promise<readonly DesktopGitAuthMethod[]>;
+    connectPersonalAccessToken?(remote: string, remember?: boolean): Promise<DesktopTokenConnection>;
+    connectGitCredential?(remote: string, login: string): Promise<DesktopTokenConnection>;
+    restore?(): Promise<boolean>;
     begin(remember?: boolean): Promise<{userCode: string; verificationUri: string; expiresAt: number}>;
     finish(): Promise<unknown>;
     authorizeRepository(remote: string, write?: boolean, review?: boolean): Promise<GitProxySession | null>;
@@ -32,6 +44,7 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
     let provider: GitAuthProvider | null = null;
     let desktopStarted = false;
     let revoking = false;
+    let pendingDisconnects = 0;
     let revision = 0;
     let remote: string | null = null;
     let desktopLogin: {done: boolean; failed: boolean; remote: string} | null = null;
@@ -43,6 +56,33 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
             typeof session.account?.login === 'string' && !!session.account.login &&
             typeof session.bearer === 'string' && /^[A-Za-z0-9_-]{43}$/u.test(session.bearer) &&
             Number.isSafeInteger(session.expiresAt) && session.expiresAt > Date.now() ? session : null;
+    }
+
+    async function getDesktopAuthMethods(target?: string): Promise<readonly DesktopGitAuthMethod[]> {
+        if (!desktop) return [];
+        if (!desktop.getAuthMethods) return ['github-app'];
+        if (target !== undefined && !isGitHubRemote(target)) return [];
+        const supported = await desktop.getAuthMethods(target);
+        return desktopMethods.filter(method => supported.includes(method) &&
+            (method !== 'fine-grained-pat' || !!desktop.connectPersonalAccessToken) &&
+            (method !== 'git-credential-helper' || !!desktop.connectGitCredential));
+    }
+
+    async function authorizeDesktop(target: string, write: boolean | undefined, review: boolean | undefined, active: number) {
+        const session = acceptDesktopSession(await (review
+            ? desktop!.authorizeRepository(target, write, true)
+            : desktop!.authorizeRepository(target, write)));
+        if (active !== revision) return;
+        if (!session) throw new Error('SESSION_REQUIRED');
+        desktopLogin = null;
+        view = {mode: 'desktop', proxyOrigin: session.connection.proxyOrigin, write, review,
+            state: {status: 'connected', account: session.account, expiresAt: session.expiresAt}};
+    }
+
+    function cancelDesktopConnection() {
+        remote = null;
+        desktopStarted = false;
+        view = {mode: 'desktop', state: disconnected};
     }
 
     async function disconnect() {
@@ -61,6 +101,8 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
 
     const commands = {
         modes: Object.freeze(modes),
+        getDesktopAuthMethods,
+        canRestoreDesktop: !!desktop?.restore,
         getView: () => view,
         async select(mode: GitConnectionMode) {
             if (!modes.includes(mode)) throw new Error('GIT_UNAVAILABLE');
@@ -68,7 +110,7 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
             await disconnect();
             view = {mode, state: disconnected, proxyOrigin: mode === 'cloudflare' ? cloudflare?.proxyOrigin : undefined};
         },
-        async connect(target: string, write = false, review = false) {
+        async connect(target: string, write = false, review = false, auth: DesktopGitAuthOptions = {method: 'github-app'}) {
             if (!isGitHubRemote(target)) throw new Error('INVALID_REMOTE');
             if (!view.mode || view.state.status === 'connecting' || revoking) throw new Error('GIT_UNAVAILABLE');
             if (provider || desktopStarted) await disconnect();
@@ -85,7 +127,20 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
                     });
                     await provider.connect();
                 } else if (mode === 'desktop' && desktop) {
+                    if (!(await getDesktopAuthMethods(target)).includes(auth.method)) throw new Error('GIT_UNAVAILABLE');
+                    if (revision !== active || pendingDisconnects) return;
                     desktopStarted = true;
+                    if (auth.method !== 'github-app') {
+                        const result = auth.method === 'fine-grained-pat' ?
+                            await desktop.connectPersonalAccessToken!(target, auth.remember) :
+                            await desktop.connectGitCredential!(target, auth.login);
+                        if (revision !== active) return;
+                        if (result === null) return cancelDesktopConnection();
+                        if (pendingDisconnects) return;
+                        if (result.status !== 'connected') throw new Error('INVALID_RESPONSE');
+                        await authorizeDesktop(target, write, review, active);
+                        return;
+                    }
                     const {userCode, verificationUri, expiresAt} = await desktop.begin(false);
                     if (revision !== active) return;
                     if (verificationUri !== 'https://github.com/login/device' ||
@@ -100,7 +155,30 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
                     );
                 }
             } catch (error) {
-                if (revision === active) view = {...view, state: disconnected};
+                if (revision === active) view = {...view, state: disconnected, authorization: undefined};
+                throw error;
+            }
+        },
+        async restoreDesktop(target: string, write = false, review = false) {
+            if (!isGitHubRemote(target)) throw new Error('INVALID_REMOTE');
+            if (view.mode !== 'desktop' || !desktop?.restore || view.state.status === 'connecting' || revoking)
+                throw new Error('GIT_UNAVAILABLE');
+            if (desktopStarted) await disconnect();
+            const active = ++revision;
+            remote = target;
+            desktopStarted = true;
+            view = {...view, write, review, state: {status: 'connecting'}};
+            try {
+                const restored = await desktop.restore();
+                if (revision !== active) return;
+                if (!restored) {
+                    cancelDesktopConnection();
+                    throw new Error('NO_SAVED_CONNECTION');
+                }
+                if (pendingDisconnects) return;
+                await authorizeDesktop(target, write, review, active);
+            } catch (error) {
+                if (active === revision) view = {...view, state: disconnected};
                 throw error;
             }
         },
@@ -119,14 +197,7 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
                 return;
             }
             if (desktopLogin?.done) {
-                const session = acceptDesktopSession(await (view.review
-                    ? desktop.authorizeRepository(desktopLogin.remote, view.write, true)
-                    : desktop.authorizeRepository(desktopLogin.remote, view.write)));
-                if (active !== revision) return;
-                if (!session) throw new Error('SESSION_REQUIRED');
-                desktopLogin = null;
-                view = {mode: 'desktop', proxyOrigin: session.connection.proxyOrigin, write: view.write, review: view.review,
-                    state: {status: 'connected', account: session.account, expiresAt: session.expiresAt}};
+                await authorizeDesktop(desktopLogin.remote, view.write, view.review, active);
             } else if (view.state.status === 'connected') {
                 const session = acceptDesktopSession(await desktop.getSession());
                 if (active === revision && !session) view = {...view, state: {status: 'reauth-required'}};
@@ -134,11 +205,11 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
         },
         disconnect,
         async getSession(target?: string, write = false, review = false): Promise<GitProxySession | null> {
-            if (revoking || view.state.status !== 'connected' || (target !== undefined && target !== remote) ||
+            if (revoking || pendingDisconnects || view.state.status !== 'connected' || (target !== undefined && target !== remote) ||
                 (write && !view.write) || (review && !view.review)) return null;
             const active = revision;
             const session = provider ? await provider.getSession() : acceptDesktopSession(await desktop?.getSession() ?? null);
-            return active === revision && session?.connection.mode === view.mode &&
+            return !pendingDisconnects && active === revision && session?.connection.mode === view.mode &&
                 session.connection.proxyOrigin === view.proxyOrigin ? session : null;
         }
     };
@@ -150,8 +221,13 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
     }
     return {...commands,
         select: (mode: GitConnectionMode) => serial(() => commands.select(mode)),
-        connect: (remote: string, write?: boolean, review?: boolean) => serial(() => commands.connect(remote, write, review)),
+        connect: (remote: string, write?: boolean, review?: boolean, auth?: DesktopGitAuthOptions) =>
+            serial(() => commands.connect(remote, write, review, auth)),
+        restoreDesktop: (remote: string, write?: boolean, review?: boolean) => serial(() => commands.restoreDesktop(remote, write, review)),
         refresh: () => serial(commands.refresh),
-        disconnect: () => serial(disconnect)
+        disconnect() {
+            pendingDisconnects++;
+            return serial(disconnect).finally(() => {pendingDisconnects--;});
+        }
     };
 }
