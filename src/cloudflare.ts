@@ -6,6 +6,8 @@ export interface CloudflareGitAuthOptions {
     readonly proxyOrigin: string;
     readonly remote: string;
     readonly write: boolean;
+    /** Requests the separate grant to submit pull request reviews. Omitted means no review grant. */
+    readonly review?: boolean;
     readonly openAuthorization: (url: string) => void;
     readonly fetch?: typeof fetch;
 }
@@ -34,8 +36,9 @@ async function responseJson(response: Response) {
 }
 
 export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitAuthProvider {
-    const {bffOrigin, proxyOrigin, remote, write, openAuthorization, fetch: send = fetch} = options;
-    if (!isHttpsOrigin(bffOrigin) || !isHttpsOrigin(proxyOrigin) || !isGitHubRemote(remote)) {
+    const {bffOrigin, proxyOrigin, remote, write, review = false, openAuthorization, fetch: send = fetch} = options;
+    if (!isHttpsOrigin(bffOrigin) || !isHttpsOrigin(proxyOrigin) || !isGitHubRemote(remote) ||
+        typeof review !== 'boolean') {
         throw new CloudflareGitAuthError('INVALID_CONFIGURATION');
     }
 
@@ -110,7 +113,7 @@ export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitA
             try {
                 const response = await request('/start', {
                     method: 'POST', signal, headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({remote, write})
+                    body: JSON.stringify(review ? {remote, write, review} : {remote, write})
                 });
                 if (response.status !== 200) throw new CloudflareGitAuthError('REQUEST_FAILED');
                 const value = await responseJson(response) as {ticket?: unknown; authorizationUrl?: unknown};
