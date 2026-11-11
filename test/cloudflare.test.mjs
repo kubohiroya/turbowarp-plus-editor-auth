@@ -109,3 +109,19 @@ test('keeps a failed revocation retryable without making its session available',
     await provider.disconnect();
     assert.deepEqual(requests.map(({init}) => init.method), ['POST', 'DELETE', 'DELETE']);
 });
+
+test('requests the review grant only when asked and rejects a non-boolean value', async () => {
+    const requests = [];
+    const provider = createCloudflareGitAuth({
+        bffOrigin, proxyOrigin, remote, write: false, review: true, openAuthorization() {},
+        fetch: async (url, init) => {
+            requests.push({url, init});
+            return Response.json({ticket, authorizationUrl});
+        }
+    });
+    await provider.connect();
+    assert.deepEqual(JSON.parse(requests[0].init.body), {remote, write: false, review: true});
+    assert.throws(() => createCloudflareGitAuth({
+        bffOrigin, proxyOrigin, remote, write: false, review: 'yes', openAuthorization() {}
+    }), {code: 'INVALID_CONFIGURATION'});
+});
