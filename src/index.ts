@@ -13,6 +13,8 @@ export interface GitProxySession {
     readonly connection: GitProxyConnection;
     readonly account: GitAccount;
     readonly bearer: string;
+    /** Present when the normal Git connection was explicitly bound to a repository ID. */
+    readonly repositoryId?: number;
     /** Milliseconds since the Unix epoch. */
     readonly expiresAt: number;
 }
@@ -33,3 +35,11 @@ export {createCloudflareGitAuth, CloudflareGitAuthError} from './cloudflare.js';
 export type {CloudflareGitAuthOptions} from './cloudflare.js';
 export {createGitConnectionSettings} from './connection-settings.js';
 export type {DesktopGitPreload, DesktopGitAuthMethod, DesktopGitAuthOptions} from './connection-settings.js';
+export {createRepositoryCreationClient, RepositoryCreationError} from './repository-creation.js';
+export {createCloudflareRepositoryCreationAuthorization} from './cloudflare-creation.js';
+export type {CreatedRepository, CreationGrant, CreationOwner, CreationSession, RepositoryCreationClientOptions,
+    RepositoryCreationDraft, RepositoryCreationErrorCode, RepositoryCreationInspection, RepositoryCreationIntent, RepositoryVisibility}
+    from './repository-creation.js';
+export {createRepositoryCreationHost} from './repository-creation-host.js';
+export type {RepositoryCreationAttempt, RepositoryCreationCandidate, RepositoryCreationHostOptions}
+    from './repository-creation-host.js';
