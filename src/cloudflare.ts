@@ -5,6 +5,8 @@ export interface CloudflareGitAuthOptions {
     readonly bffOrigin: string;
     readonly proxyOrigin: string;
     readonly remote: string;
+    /** Required for the first push to a just-created repository. */
+    readonly repositoryId?: number;
     readonly write: boolean;
     /** Requests the separate grant to submit pull request reviews. Omitted means no review grant. */
     readonly review?: boolean;
@@ -36,9 +38,9 @@ async function responseJson(response: Response) {
 }
 
 export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitAuthProvider {
-    const {bffOrigin, proxyOrigin, remote, write, review = false, openAuthorization, fetch: send = fetch} = options;
+    const {bffOrigin, proxyOrigin, remote, repositoryId, write, review = false, openAuthorization, fetch: send = fetch} = options;
     if (!isHttpsOrigin(bffOrigin) || !isHttpsOrigin(proxyOrigin) || !isGitHubRemote(remote) ||
-        typeof review !== 'boolean') {
+        typeof review !== 'boolean' || repositoryId !== undefined && (!Number.isSafeInteger(repositoryId) || repositoryId < 1)) {
         throw new CloudflareGitAuthError('INVALID_CONFIGURATION');
     }
 
@@ -93,12 +95,13 @@ export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitA
         if (value.connection?.mode !== connection.mode || value.connection.proxyOrigin !== proxyOrigin ||
             typeof bearer !== 'string' || !credentialPattern.test(bearer) || bearer === current ||
             typeof account?.login !== 'string' || !account.login ||
-            typeof expiresAt !== 'number' || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) {
+            typeof expiresAt !== 'number' || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() ||
+            repositoryId !== undefined && value.repositoryId !== repositoryId) {
             throw new CloudflareGitAuthError('INVALID_RESPONSE');
         }
         const displayAccount = {login: account.login};
         state = {status: 'connected', account: displayAccount, expiresAt};
-        return {connection, account: displayAccount, bearer, expiresAt};
+        return {connection, account: displayAccount, bearer, expiresAt, ...(repositoryId !== undefined && {repositoryId})};
     }
 
     return {
@@ -113,7 +116,7 @@ export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitA
             try {
                 const response = await request('/start', {
                     method: 'POST', signal, headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(review ? {remote, write, review} : {remote, write})
+                    body: JSON.stringify({remote, write, ...(review && {review}), ...(repositoryId !== undefined && {repositoryId})})
                 });
                 if (response.status !== 200) throw new CloudflareGitAuthError('REQUEST_FAILED');
                 const value = await responseJson(response) as {ticket?: unknown; authorizationUrl?: unknown};

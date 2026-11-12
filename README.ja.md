@@ -12,6 +12,16 @@ Desktop のメインプロセスが GitHub の device flow とループバック
 
 Node.js 26 で `npm ci` と `npm run build` を実行すると、Vite のライブラリエントリと TypeScript の型宣言が生成されます。 [接続契約と作業範囲](https://github.com/kubohiroya/turbowarp-plus-editor/issues/315)
 
+## 新しいリポジトリの作成契約
+
+`createRepositoryCreationClient` は、ホストのアカウント認証から受け取った作成専用の `CreationGrant` を検証し、作成先を取得して `CreationSession` を返します。OAuth トークンはホストが保管します。`scope` は `repository-creation`、Bearer は通常の Git セッションと区別する `create.` 付きの値です。クライアントは、設定したオリジンの `/v1/github-create/` にだけ Bearer を送ります。ホストでもスコープ、失効、アカウント、作成先と公開範囲の許可を毎回確認します。
+
+作成 API はアカウントと公開範囲を照合して空のリポジトリを作ります。作成結果の確認後に、初期コミットの push 用として、そのリポジトリ ID に限定した通常の Git セッションを取得します。
+
+`createRepositoryCreationHost` は、作成前に操作 ID、作成先、公開範囲、初期ファイルのダイジェスト、確認済みの Topics を記録します。応答が途切れた場合は `unknown` を返します。作成日時と空であることを確認できたリポジトリも候補として扱い、利用者がリポジトリ ID を確認し、ホストで同じ ID を再確認した場合に引き継ぎます。Topics の設定では記録した操作 ID とリポジトリ ID を照合します。Topics の失敗後も作成済みのリポジトリ ID は保持します。永続ストレージ、ホスト認証、GitHub 中継ルートはホスト側の実装段階で接続します。 [作成機能の追跡](https://github.com/kubohiroya/turbowarp-plus-editor/issues/525)
+
+GitHub の公開仕様では、専用の **Repository creation（書き込み）** または **Administration（書き込み）** が作成の権限です。GitHub App は専用権限で自身が作成したリポジトリへのアクセスを得ます。Topics を設定する API は Administration（書き込み）を要求します。作成・初期 push・Topics の権限は別々に確認し、認証方式ごとの対応は承認された検証環境で確認します。 [GitHub App の権限](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app) · [個人リポジトリの作成](https://docs.github.com/en/rest/repos/repos#create-a-repository-for-the-authenticated-user) · [組織リポジトリの作成](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository) · [Topics の更新](https://docs.github.com/en/rest/repos/repos#replace-all-repository-topics)
+
 ## 公開
 
 npm への公開は `.github/workflows/release.yml` が行う。`package.json` の版と同じ `v<版>` のタグを
