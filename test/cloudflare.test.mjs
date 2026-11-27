@@ -62,6 +62,26 @@ test('connects explicitly and keeps the login ticket on the BFF', async () => {
     ]);
 });
 
+test('disconnect waits for a late start response to be retired without opening authorization',async()=>{
+    let release,entered;const ready=new Promise(resolve=>{entered=resolve;}),held=new Promise(resolve=>{release=resolve;});
+    const requests=[],opened=[];
+    const provider=createCloudflareGitAuth({bffOrigin,proxyOrigin,remote,write:true,openAuthorization:url=>opened.push(url),
+        fetch:async(url,init)=>{requests.push({url,init});if(url.endsWith('/start')){entered();await held;return Response.json({ticket,authorizationUrl});}
+            return new Response(null,{status:204});}});
+    const connecting=provider.connect();await ready;const stopping=provider.disconnect();
+    assert.equal(await provider.getSession(),null);release();await connecting;await stopping;
+    assert.deepEqual(opened,[]);assert.equal(requests.filter(request=>request.init.method==='DELETE').length,1);
+    assert.equal((await provider.getState()).status,'disconnected');
+});
+
+test('accepted revocation is pending until the issuer confirms the GitHub scope',async()=>{
+    const {provider}=fixture([Response.json({ticket,authorizationUrl}),Response.json(credentials()),
+        new Response(null,{status:202}),new Response(null,{status:204,headers:{'X-GitHub-Revocation':'token'}})]);
+    await provider.connect();await provider.getState();await assert.rejects(provider.disconnect(),{code:'REVOCATION_PENDING'});
+    assert.equal(await provider.getSession(),null);assert.deepEqual(provider.getSignOutState(),{local:'stopped',session:'revoked',github:'pending'});
+    await provider.disconnect();assert.deepEqual(provider.getSignOutState(),{local:'stopped',session:'revoked',github:'token-revoked'});
+});
+
 test('rejects an unexpected authorization target or proxy and clears an expired session', async () => {
     const badLogin = fixture([
         Response.json({ticket, authorizationUrl: authorizationUrl.replace('github.com', 'other.example')}),

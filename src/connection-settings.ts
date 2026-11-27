@@ -2,6 +2,8 @@ import {createCloudflareGitAuth} from './cloudflare.js';
 import {isGitHubRemote} from './github-remote.js';
 import type {CloudflareGitAuthOptions} from './cloudflare.js';
 import type {GitAuthProvider, GitAuthState, GitConnectionMode, GitProxySession} from './index.js';
+import type {GitSignOutState} from './signout.js';
+import {publicGitHubAccount} from './identity.js';
 
 const desktopMethods = ['github-app', 'fine-grained-pat', 'git-credential-helper'] as const;
 export type DesktopGitAuthMethod = typeof desktopMethods[number];
@@ -30,11 +32,12 @@ type View = {
     write?: boolean;
     review?: boolean;
     authorization?: {url: string; userCode?: string};
+    signOut?: GitSignOutState;
 };
 
 export function createGitConnectionSettings({desktop, cloudflare}: {
     desktop?: DesktopGitPreload | null;
-    cloudflare?: Pick<CloudflareGitAuthOptions, 'bffOrigin' | 'proxyOrigin' | 'fetch'> | null;
+    cloudflare?: Pick<CloudflareGitAuthOptions, 'bffOrigin' | 'proxyOrigin' | 'fetch' | 'selectAccount'> | null;
 }) {
     const modes: GitConnectionMode[] = [];
     if (desktop) modes.push('desktop');
@@ -53,7 +56,7 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
         return session?.connection.mode === 'desktop' &&
             /^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/u.test(session.connection.proxyOrigin) &&
             URL.parse(session.connection.proxyOrigin)?.origin === session.connection.proxyOrigin &&
-            typeof session.account?.login === 'string' && !!session.account.login &&
+            !!publicGitHubAccount(session.account) &&
             typeof session.bearer === 'string' && /^[A-Za-z0-9_-]{43}$/u.test(session.bearer) &&
             Number.isSafeInteger(session.expiresAt) && session.expiresAt > Date.now() ? session : null;
     }
@@ -85,18 +88,36 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
         view = {mode: 'desktop', state: disconnected};
     }
 
-    async function disconnect() {
+    let disconnecting: Promise<void> | undefined;
+    async function stopConnection() {
         revision++;
         remote = null;
         desktopLogin = null;
+        const hadConnection = !!provider || desktopStarted || !!view.signOut;
         view = {mode: view.mode, state: disconnected,
-            proxyOrigin: view.mode === 'cloudflare' ? cloudflare?.proxyOrigin : undefined};
+            proxyOrigin: view.mode === 'cloudflare' ? cloudflare?.proxyOrigin : undefined,
+            ...(hadConnection && {signOut: {local: 'stopped', session: 'pending', github: 'unconfirmed'}})};
         revoking = true;
-        if (provider) await provider.disconnect();
-        if (desktopStarted) await desktop!.disconnect();
-        provider = null;
-        desktopStarted = false;
-        revoking = false;
+        try {
+            if (provider) {
+                await provider.disconnect();
+                if (view.signOut) view.signOut = provider.getSignOutState?.() ?? {local: 'stopped', session: 'revoked', github: 'unconfirmed'};
+                provider = null;
+            }
+            if (desktopStarted) {
+                await desktop!.disconnect();
+                desktopStarted = false;
+                if (view.signOut) view.signOut = {local: 'stopped', session: 'revoked', github: 'unconfirmed'};
+            }
+            revoking = false;
+        } catch (error) {
+            if (view.signOut && provider?.getSignOutState) view.signOut = provider.getSignOutState();
+            throw error;
+        }
+    }
+
+    function disconnect() {
+        return disconnecting ??= stopConnection().finally(() => {disconnecting = undefined;});
     }
 
     const commands = {
@@ -112,7 +133,7 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
         },
         async connect(target: string, write = false, review = false, auth: DesktopGitAuthOptions = {method: 'github-app'}) {
             if (!isGitHubRemote(target)) throw new Error('INVALID_REMOTE');
-            if (!view.mode || view.state.status === 'connecting' || revoking) throw new Error('GIT_UNAVAILABLE');
+            if (!view.mode || view.state.status === 'connecting' || revoking || pendingDisconnects) throw new Error('GIT_UNAVAILABLE');
             if (provider || desktopStarted) await disconnect();
             const mode = view.mode;
             const active = ++revision;
@@ -214,8 +235,13 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
         }
     };
     let tail = Promise.resolve();
+    let stopEpoch = 0;
     function serial(action: () => Promise<void>) {
-        const result = tail.then(action);
+        const epoch = stopEpoch;
+        const result = tail.then(() => {
+            if (epoch !== stopEpoch) throw new Error('SESSION_REQUIRED');
+            return action();
+        });
         tail = result.catch(() => {});
         return result;
     }
@@ -226,8 +252,10 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
         restoreDesktop: (remote: string, write?: boolean, review?: boolean) => serial(() => commands.restoreDesktop(remote, write, review)),
         refresh: () => serial(commands.refresh),
         disconnect() {
+            stopEpoch++;
             pendingDisconnects++;
-            return serial(disconnect).finally(() => {pendingDisconnects--;});
+            // Stop immediately, including while another IPC or BFF request is still pending.
+            return disconnect().finally(() => {pendingDisconnects--;});
         }
     };
 }

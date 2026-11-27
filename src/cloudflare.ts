@@ -1,7 +1,10 @@
 import type {GitAuthProvider, GitAuthState, GitProxySession} from './index.js';
+import type {GitSignOutState} from './signout.js';
 import {isGitHubRemote} from './github-remote.js';
+import {publicGitHubAccount} from './identity.js';
 
 export interface CloudflareGitAuthOptions {
+    readonly selectAccount?: boolean;
     readonly bffOrigin: string;
     readonly proxyOrigin: string;
     readonly remote: string;
@@ -49,6 +52,9 @@ export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitA
     let pendingRevocation: string | null = null;
     let state: GitAuthState = {status: 'disconnected'};
     let revision = 0;
+    let starting: Promise<void> | undefined;
+    let unknownStart = false;
+    let signOut: GitSignOutState = {local: 'stopped', session: 'pending', github: 'unconfirmed'};
 
     async function request(path: '/start' | '/session', init: RequestInit) {
         let response;
@@ -66,11 +72,22 @@ export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitA
     }
 
     async function revoke(value: string) {
+        pendingRevocation = value;
         const response = await request('/session', {
-            method: 'DELETE', headers: {Authorization: 'Bearer ' + value}
+            method: 'DELETE', headers: {Authorization: 'Bearer ' + value},
+            signal: AbortSignal.timeout(15_000), keepalive: true
         });
+        if (response.status === 202) {
+            signOut = {local: 'stopped', session: 'revoked', github: 'pending'};
+            throw new CloudflareGitAuthError('REVOCATION_PENDING');
+        }
         if (response.status !== 204 && response.status !== 401)
             throw new CloudflareGitAuthError('REQUEST_FAILED');
+        const scope = response.headers.get('X-GitHub-Revocation');
+        signOut = {local: 'stopped', session: 'revoked',
+            github: response.status === 204 && scope === 'token' ? 'token-revoked' :
+                response.status === 204 && scope === 'authorization' ? 'authorization-revoked' : 'unconfirmed'};
+        if (pendingRevocation === value) pendingRevocation = null;
     }
 
     async function getSession(): Promise<GitProxySession | null> {
@@ -92,21 +109,22 @@ export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitA
         const value = await responseJson(response) as Partial<GitProxySession>;
         if (revision !== active) return null;
         const {bearer, expiresAt, account} = value;
+        const displayAccount = publicGitHubAccount(account);
         if (value.connection?.mode !== connection.mode || value.connection.proxyOrigin !== proxyOrigin ||
             typeof bearer !== 'string' || !credentialPattern.test(bearer) || bearer === current ||
-            typeof account?.login !== 'string' || !account.login ||
+            !displayAccount ||
             typeof expiresAt !== 'number' || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() ||
             repositoryId !== undefined && value.repositoryId !== repositoryId) {
             throw new CloudflareGitAuthError('INVALID_RESPONSE');
         }
-        const displayAccount = {login: account.login};
         state = {status: 'connected', account: displayAccount, expiresAt};
         return {connection, account: displayAccount, bearer, expiresAt, ...(repositoryId !== undefined && {repositoryId})};
     }
 
     return {
         connection,
-        async connect(signal) {
+        connect(signal) {
+            return starting ??= (async () => {
             signal?.throwIfAborted();
             if (pendingRevocation) throw new CloudflareGitAuthError('REVOCATION_PENDING');
             if (state.status === 'connecting' || ticket) return;
@@ -114,8 +132,10 @@ export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitA
             state = {status: 'connecting'};
             let created: string | null = null;
             try {
+                unknownStart = true;
                 const response = await request('/start', {
-                    method: 'POST', signal, headers: {'Content-Type': 'application/json'},
+                    method: 'POST', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
+                    headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({remote, write, ...(review && {review}), ...(repositoryId !== undefined && {repositoryId})})
                 });
                 if (response.status !== 200) throw new CloudflareGitAuthError('REQUEST_FAILED');
@@ -123,6 +143,7 @@ export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitA
                 if (typeof value.ticket !== 'string' || !credentialPattern.test(value.ticket))
                     throw new CloudflareGitAuthError('INVALID_RESPONSE');
                 created = value.ticket;
+                unknownStart = false;
                 const url = typeof value.authorizationUrl === 'string' ? URL.parse(value.authorizationUrl) : null;
                 if (!url || !url.href.startsWith('https://github.com/login/oauth/authorize?') || url.hash ||
                     url.searchParams.get('state') !== created.split('.')[0])
@@ -133,6 +154,7 @@ export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitA
                 }
                 signal?.throwIfAborted();
                 ticket = created;
+                if (options.selectAccount) url.searchParams.set('prompt', 'select_account');
                 openAuthorization(url.href);
             } catch (error) {
                 if (revision === active) {
@@ -142,22 +164,24 @@ export function createCloudflareGitAuth(options: CloudflareGitAuthOptions): GitA
                 }
                 throw error;
             }
+            })().finally(() => {starting = undefined;});
         },
         async getState() {
             if (ticket) await getSession();
             return state;
         },
         getSession,
+        getSignOutState: () => ({...signOut}),
         async disconnect() {
-            const current = ticket ?? pendingRevocation;
             revision++;
+            const current = ticket;
             ticket = null;
             state = {status: 'disconnected'};
-            if (current) {
-                pendingRevocation = current;
-                await revoke(current);
-                if (pendingRevocation === current) pendingRevocation = null;
-            }
+            if (current) pendingRevocation = current;
+            if (starting) await starting.catch(() => {});
+            if (pendingRevocation) await revoke(pendingRevocation);
+            else if (unknownStart) throw new CloudflareGitAuthError('REQUEST_FAILED');
+            else if (signOut.session !== 'revoked') signOut = {...signOut, session: 'revoked'};
         }
     };
 }

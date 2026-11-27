@@ -77,3 +77,17 @@ test('sends the review grant to the Cloudflare BFF', async () => {
     assert.equal(settings.getView().review, true);
     assert.equal(settings.getView().authorization.url, authorizationUrl);
 });
+
+test('sign-out bypasses a stuck Desktop command and invalidates commands already queued behind it',async()=>{
+    const desktop=desktopPreload();let release,entered;let stopped=false;
+    const started=new Promise(resolve=>{entered=resolve;}),held=new Promise(resolve=>{release=resolve;});
+    desktop.begin=async()=>{entered();await held;return {userCode:'ABCD-EFGH',verificationUri:'https://github.com/login/device',expiresAt:Date.now()+60000};};
+    desktop.disconnect=async()=>{stopped=true;};
+    const settings=createGitConnectionSettings({desktop});await settings.select('desktop');
+    const connecting=settings.connect(remote);await started;
+    const queued=settings.connect(remote);const rejected=assert.rejects(queued,/SESSION_REQUIRED/);
+    await settings.disconnect();assert.equal(stopped,true);assert.equal(settings.getView().state.status,'disconnected');
+    assert.equal(await settings.getSession(remote),null);
+    release();await connecting;await rejected;await settings.refresh();
+    assert.equal(settings.getView().state.status,'disconnected');assert.deepEqual(desktop.calls,[]);
+});
