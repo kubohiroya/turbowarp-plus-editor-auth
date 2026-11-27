@@ -1,4 +1,7 @@
 export type GitConnectionMode = 'desktop' | 'cloudflare';
+export {createGitAccountConnections} from './account-connections.js';
+export type {DesktopGitAccounts} from './account-connections.js';
+export type {GitSignOutState, GitSignOutReceipt, SignOutStorage} from './signout.js';
 
 export interface GitProxyConnection {
     readonly mode: GitConnectionMode;
@@ -7,6 +10,8 @@ export interface GitProxyConnection {
 
 export interface GitAccount {
     readonly login: string;
+    /** GitHub's durable user ID. Older single-account hosts may omit it; pair writes require it. */
+    readonly id?: number;
 }
 
 export interface GitProxySession {
@@ -29,7 +34,10 @@ export interface GitAuthProvider {
     getState(): Promise<GitAuthState>;
     getSession(): Promise<GitProxySession | null>;
     disconnect(): Promise<void>;
+    getSignOutState?(): GitSignOutState;
 }
+
+import type {GitSignOutState} from './signout.js';
 
 export {createCloudflareGitAuth, CloudflareGitAuthError} from './cloudflare.js';
 export type {CloudflareGitAuthOptions} from './cloudflare.js';
