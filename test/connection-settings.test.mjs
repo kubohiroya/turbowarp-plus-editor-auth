@@ -91,3 +91,20 @@ test('sign-out bypasses a stuck Desktop command and invalidates commands already
     release();await connecting;await rejected;await settings.refresh();
     assert.equal(settings.getView().state.status,'disconnected');assert.deepEqual(desktop.calls,[]);
 });
+
+test('moves a connection to the renamed remote without a new login', async () => {
+    const desktop = desktopPreload();
+    const settings = createGitConnectionSettings({desktop});
+    await settings.select('desktop');
+    await settings.connect(remote, true, false, {method: 'github-app'});
+    await settings.refresh();
+    assert.equal(settings.getView().state.status, 'connected');
+    const renamed = 'https://github.com/owner/renamed.git';
+    assert.equal(await settings.renameRemote('https://github.com/owner/other.git', renamed), false);
+    assert.ok(await settings.getSession(remote, true));
+    assert.equal(await settings.renameRemote('https://github.com/Owner/Repo', renamed), true);
+    assert.equal(await settings.getSession(remote, true), null);
+    assert.ok(await settings.getSession(renamed, true));
+    assert.equal(desktop.calls.length, 1);
+    await assert.rejects(settings.renameRemote(renamed, 'https://example.test/x.git'), /INVALID_REMOTE/u);
+});

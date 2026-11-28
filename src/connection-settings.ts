@@ -225,6 +225,18 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
             }
         },
         disconnect,
+        /**
+         * Moves the connection to the repository's new remote after the proxy renamed it. The proxy has already bound
+         * the session to the new name, so no new login is needed. Returns whether the connection was for `from`.
+         */
+        async renameRemote(from: string, to: string): Promise<boolean> {
+            if (!isGitHubRemote(from) || !isGitHubRemote(to)) throw new Error('INVALID_REMOTE');
+            const key = (value: string) => value.replace(/\.git$/u, '').toLowerCase();
+            if (remote === null || key(remote) !== key(from)) return false;
+            remote = to;
+            if (desktopLogin && key(desktopLogin.remote) === key(from)) desktopLogin.remote = to;
+            return true;
+        },
         async getSession(target?: string, write = false, review = false): Promise<GitProxySession | null> {
             if (revoking || pendingDisconnects || view.state.status !== 'connected' || (target !== undefined && target !== remote) ||
                 (write && !view.write) || (review && !view.review)) return null;
@@ -251,6 +263,10 @@ export function createGitConnectionSettings({desktop, cloudflare}: {
             serial(() => commands.connect(remote, write, review, auth)),
         restoreDesktop: (remote: string, write?: boolean, review?: boolean) => serial(() => commands.restoreDesktop(remote, write, review)),
         refresh: () => serial(commands.refresh),
+        renameRemote: (from: string, to: string) => {
+            let renamed = false;
+            return serial(async () => {renamed = await commands.renameRemote(from, to);}).then(() => renamed);
+        },
         disconnect() {
             stopEpoch++;
             pendingDisconnects++;
