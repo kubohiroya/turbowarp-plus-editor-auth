@@ -142,6 +142,18 @@ export function createGitAccountConnections({desktop, cloudflare, primary, signO
             };
         },
         disconnect,
+        /**
+         * Moves every connection for `from` to `to` after the proxy renamed the repository, without a new login.
+         * Returns whether any connection was for `from`.
+         */
+        async renameRemote(from: string, to: string) {
+            let renamed = false;
+            for (const [id, settings] of slots) {
+                if (receipts.has(id)) continue;
+                if (await settings.renameRemote(from, to)) renamed = true;
+            }
+            return renamed;
+        },
         async disconnectAll() {
             const results = await Promise.allSettled([...slots.keys()].map(disconnect));
             const failed = results.find(result => result.status === 'rejected');

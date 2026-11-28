@@ -161,3 +161,21 @@ test('a pending legacy token connection cannot be replaced concurrently or reviv
     await accounts.disconnect(accounts.list()[0].id);release({status:'connected'});
     await assert.rejects(first,/SESSION_REQUIRED/);assert.equal(accounts.list().filter(a=>a.state.status==='connected').length,0);
 });
+
+test('moves every account connection for a renamed repository without a new login', async () => {
+    let seq = 0; const sessions = new Map(), authorized = [];
+    const desktop = {async create() {const id = String(++seq); sessions.set(id, {connection: {mode: 'desktop', proxyOrigin: `http://127.0.0.1:${4000 + seq}`},
+        account: {id: seq, login: `user${seq}`}, bearer: id.repeat(43), expiresAt: Date.now() + 100000}); return id;},
+        async begin() {return {userCode: 'ABCD-EFGH', verificationUri: 'https://github.com/login/device', expiresAt: Date.now() + 100000};},
+        async finish() {}, async authorizeRepository(id, remote) {authorized.push(remote); return sessions.get(id);},
+        async getSession(id) {return sessions.get(id);}, async disconnect(id) {sessions.delete(id);}};
+    const accounts = createGitAccountConnections({desktop});
+    const remote = 'https://github.com/owner/repo.git', renamed = 'https://github.com/owner/renamed.git';
+    const a = await accounts.begin(remote, 'desktop', true); await accounts.refresh(a.id);
+    assert.equal(await accounts.renameRemote('https://github.com/owner/other.git', renamed), false);
+    assert.equal(await accounts.renameRemote(remote, renamed), true);
+    assert.equal(await accounts.bind(a.id)(remote, true), null);
+    assert.equal((await accounts.bind(a.id)(renamed, true)).account.login, 'user1');
+    assert.deepEqual(authorized, [remote]);
+    await accounts.dispose();
+});
